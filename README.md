@@ -1,84 +1,178 @@
-# YoloKit
+<h1 align="center">YoloKit</h1>
 
-Demo app that uses this library: [YoloKitMobile](../YoloKitMobile).
+<p align="center">YOLO object detection for Android.</p>
 
-On-device YOLO object detection for Android. Two engines behind one API:
+<div align="center">
+  <img src="https://skillicons.dev/icons?i=kotlin" height="40" alt="Kotlin logo" />
+  <img width="12" />
+  <img src="https://skillicons.dev/icons?i=cpp" height="40" alt="C++ logo" />
+  <img width="12" />
+  <img src="https://skillicons.dev/icons?i=cmake" height="40" alt="CMake logo" />
+  <img width="12" />
+  <img src="https://skillicons.dev/icons?i=gradle" height="40" alt="Gradle logo" />
+  <img width="12" />
+  <img src="https://skillicons.dev/icons?i=androidstudio" height="40" alt="Android Studio logo" />
+</div>
 
-- **NCNN** (Vulkan GPU, CPU fallback) on any Android 7+ device.
-- **QNN** (Hexagon NPU through the QNN HTP backend) on arm64 Qualcomm devices.
+<p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
-## Install (git)
+YoloKit is an Android library for running YOLO models on bitmaps. It returns
+bounding boxes, class names, and confidence scores through a Kotlin API.
 
-Add the repository as a git submodule and include the module through a composite build:
+It uses ncnn with Vulkan acceleration and CPU fallback, or Qualcomm QNN on
+supported Snapdragon devices. The library handles image padding, box decoding,
+and NMS in C++; it does not use OpenCV.
+
+The camera sample is in [YoloKitMobile](https://github.com/gd182/YoloKitMobile).
+
+## Add to your project
+
+The library is connected from source through a Gradle composite build.
+Add it as a submodule:
 
 ```bash
-git submodule add https://github.com/gd182/YoloKitMobile.git vendor/YoloKitMobile
+git submodule add https://github.com/gd182/YoloKit.git vendor/YoloKit
 ```
 
+In `settings.gradle.kts`:
+
 ```kotlin
-// settings.gradle.kts of your app
-includeBuild("vendor/YoloKitMobile") {
+includeBuild("vendor/YoloKit") {
     dependencySubstitution {
         substitute(module("io.github.gd182:yolokit")).using(project(":yolokit"))
     }
 }
 ```
 
+In the app's `build.gradle.kts`:
+
 ```kotlin
-// app/build.gradle.kts
 dependencies {
     implementation("io.github.gd182:yolokit")
 }
 ```
 
-Or clone it anywhere and point `includeBuild` at that folder. Requirements: Android Studio with
-AGP 9.4+, NDK and CMake 3.22.1. For QNN, set `qnn.sdk.dir` in `local.properties`.
+You will need Android Studio, JDK 17, Android SDK 37, the NDK, and CMake 3.22.1.
+The project uses AGP 9.4.0. ncnn is included in the repository.
 
-## Use
+The library supports Android 7.0 and newer and builds for `arm64-v8a`,
+`armeabi-v7a`, and `x86_64`. QNN is available only on `arm64-v8a`.
+
+## Run a model
+
+Put the model files in your app's `src/main/assets/` directory.
+This example uses a raw YOLOv8 DFL model with COCO labels:
 
 ```kotlin
+import io.github.gd182.yolokit.ModelConfig
+import io.github.gd182.yolokit.YoloKit
+
 val config = ModelConfig.Builder()
-    .ncnn(param = "yolov8n.param", bin = "yolov8n.bin")   // assets/
+    .ncnn(param = "yolov8n.param", bin = "yolov8n.bin")
     .labels(YoloKit.COCO_LABELS)
     .inputSize(640)
     .thresholds(confidence = 0.25f, nms = 0.45f)
     .build()
 
 val kit = YoloKit.create(context, config).getOrThrow()
-val detections = kit.detect(bitmap)   // ARGB_8888 bitmap
-detections.forEach { d -> Log.d("yolo", "${d.labelName} ${d.score} ${d.rect}") }
-kit.close()
+val detections = kit.detect(bitmap)
 ```
 
-Ultralytics native export (`yolo export format=ncnn`) uses `decoded = true`:
+Load the model and run detection off the UI thread. The input bitmap must be
+ARGB_8888. Each result has `rect`, `label`, `labelName`, and `score`;
+the rectangle uses the bitmap's pixel coordinates.
+
+Reuse `kit` for subsequent frames and call `kit.close()` when finished.
+The native layer holds one model per backend, so close the existing detector
+before loading another model. Calls to `detect` are serialized internally.
+
+For an Ultralytics `format=ncnn` export, change the model configuration to:
 
 ```kotlin
-ModelConfig.Builder().ncnn("model.ncnn.param", "model.ncnn.bin", decoded = true)
+val config = ModelConfig.Builder()
+    .ncnn("model.ncnn.param", "model.ncnn.bin", decoded = true)
+    .labels(myClasses)
+    .inputSize(640)
+    .build()
 ```
 
-QNN (Snapdragon NPU), pre-built context binary from `scripts/build_qnn_model.sh`:
-
-```kotlin
-if (YoloKit.isQnnAvailable(context)) {
-    ModelConfig.Builder().qnn("model_v81.bin").labels(myClasses).build()
-}
-```
+The builder sets the usual `in0` / `out0` tensor names and RGB input order
+for this export. Use your own class labels and export input size.
 
 ## Model requirements
 
-- `targetSize` (`inputSize`) must equal the `imgsz` used at export.
-- `labels` must list the classes in training order, one per model output class.
-- ncnn: DFL single-output YOLOv8 (`decoded = false`, default) or Ultralytics native (`decoded = true`).
-- QNN: detector output `[1, 4+nc, N]` decoded, no NMS in the graph.
+`inputSize` must match the export's `imgsz` and be a positive multiple of 32.
+Labels must match the model's classes in training order.
 
-## Notes and limits
+| Model | Output |
+|---|---|
+| Raw YOLOv8 DFL, `decoded = false` | One output; YoloKit decodes the boxes |
+| Ultralytics ncnn, `decoded = true` | Boxes already decoded in the graph |
+| QNN | Decoded `[1, 4+nc, N]` output, without NMS in the graph |
 
-- `detect` calls are serialized internally. One `YoloKit` per process is supported for now:
-  the native layer keeps one model per backend.
-- The QNN runtime libraries come with the artifact as a dependency; their license allows
-  use only inside your application, not redistribution on their own.
-- Model weights are not part of the library. Ultralytics-derived weights are AGPL-3.0.
+Model weights are not included.
+
+## QNN
+
+To compile QNN support, set the QAIRT SDK path in the library's
+`local.properties`:
+
+```properties
+qnn.sdk.dir=/path/to/QAIRT/2.50.0
+```
+
+You can also use `QNN_SDK_ROOT` or the Gradle property `-Pqnn.sdk.dir=...`.
+The SDK version must match `qnn` in `gradle/libs.versions.toml`.
+Without the SDK, the library builds with ncnn only.
+
+QNN loads a context binary built for the target device. The sample app has a
+[conversion guide](https://github.com/gd182/YoloKitMobile/blob/main/docs/QNN.md)
+and a `scripts/build_qnn_model.sh` script.
+
+```kotlin
+if (YoloKit.isQnnAvailable(context)) {
+    val config = ModelConfig.Builder()
+        .qnn("model_v81.bin")
+        .labels(myClasses)
+        .inputSize(640)
+        .build()
+
+    val kit = YoloKit.create(context, config).getOrThrow()
+    val detections = kit.detect(bitmap)
+    kit.close()
+}
+```
+
+The QNN runtime is a Gradle dependency, so its libraries are packaged in the
+APK even when you use only ncnn. The consuming app also needs the packaging
+exclusions used by YoloKit:
+
+```kotlin
+android {
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "**/libQnnDsp*.so",
+                "**/libQnnGpu.so",
+                "**/libQnnHtpPrepare.so",
+            )
+        }
+    }
+}
+```
+
+## Source
+
+The Kotlin API is in `yolokit/src/main/java/io/github/gd182/yolokit/YoloKit.kt`.
+Native code and the bundled ncnn build are in `yolokit/src/main/cpp/`.
+The project uses C++17 and ncnn 20260526.
+
+
+## Architecture
+
+<p align="center"><img src="docs/stack.svg" alt="YoloKit stack" width="720"/></p>
 
 ## License
 
-Apache-2.0. Bundled third-party components: ncnn (BSD-3-Clause), QNN runtime (Qualcomm AI Stack license).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the terms covering
+ncnn and the QNN runtime. Model weights have their own licenses.

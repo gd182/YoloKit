@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="560" viewBox="0 0 860 560" font-family="Helvetica, Arial, sans-serif">
+  <rect width="860" height="560" fill="#ffffff"/>
+  <!-- layers -->
+  <g>
+    <rect x="60" y="30" width="740" height="64" rx="10" fill="#e8f1fb" stroke="#2f6fb0" stroke-width="2"/>
+    <text x="90" y="58" font-size="18" font-weight="bold" fill="#1d3f66">Kotlin API</text>
+    <text x="90" y="80" font-size="14" fill="#1d3f66">YoloKit · ModelConfig.Builder · Detection · Backend</text>
+  </g>
+  <g>
+    <rect x="60" y="110" width="740" height="64" rx="10" fill="#eef7ee" stroke="#3b8a3b" stroke-width="2"/>
+    <text x="90" y="138" font-size="18" font-weight="bold" fill="#1f5a1f">JNI bridge</text>
+    <text x="90" y="160" font-size="14" fill="#1f5a1f">NcnnNative · QnnNative → libyolokit.so (one per ABI)</text>
+  </g>
+  <g>
+    <rect x="60" y="190" width="740" height="64" rx="10" fill="#fdf3e6" stroke="#c77a1c" stroke-width="2"/>
+    <text x="90" y="218" font-size="18" font-weight="bold" fill="#7a4a10">Native core (C++17, CMake, NDK)</text>
+    <text x="90" y="240" font-size="14" fill="#7a4a10">letterbox · decode (DFL / Ultralytics) · NMS · no OpenCV</text>
+  </g>
+  <!-- two engines -->
+  <g>
+    <rect x="60" y="270" width="350" height="110" rx="10" fill="#f3ecfa" stroke="#7b4fb0" stroke-width="2"/>
+    <text x="85" y="300" font-size="18" font-weight="bold" fill="#4b2a74">ncnn + Vulkan</text>
+    <text x="85" y="324" font-size="14" fill="#4b2a74">ncnn 20260526 (prebuilt, BSD-3)</text>
+    <text x="85" y="346" font-size="14" fill="#4b2a74">Vulkan compute · CPU fallback</text>
+  </g>
+  <g>
+    <rect x="450" y="270" width="350" height="110" rx="10" fill="#fbeaea" stroke="#b03b3b" stroke-width="2"/>
+    <text x="475" y="300" font-size="18" font-weight="bold" fill="#6e1f1f">QNN (QAIRT 2.50)</text>
+    <text x="475" y="324" font-size="14" fill="#6e1f1f">HTP backend · context binary</text>
+    <text x="475" y="346" font-size="14" fill="#6e1f1f">only with the Qualcomm SDK</text>
+  </g>
+  <!-- hardware -->
+  <g>
+    <rect x="60" y="400" width="350" height="64" rx="10" fill="#f5f5f5" stroke="#777" stroke-width="2"/>
+    <text x="85" y="428" font-size="16" font-weight="bold" fill="#333">GPU</text>
+    <text x="85" y="450" font-size="14" fill="#333">Adreno / Mali / any Vulkan 1.1 device</text>
+  </g>
+  <g>
+    <rect x="450" y="400" width="350" height="64" rx="10" fill="#f5f5f5" stroke="#777" stroke-width="2"/>
+    <text x="475" y="428" font-size="16" font-weight="bold" fill="#333">NPU</text>
+    <text x="475" y="450" font-size="14" fill="#333">Hexagon HTP · Snapdragon arm64</text>
+  </g>
+  <!-- arrows -->
+  <g stroke="#555" stroke-width="2" fill="#555">
+    <line x1="430" y1="94" x2="430" y2="108"/>
+    <line x1="430" y1="174" x2="430" y2="188"/>
+    <line x1="235" y1="254" x2="235" y2="268"/>
+    <line x1="625" y1="254" x2="625" y2="268"/>
+    <line x1="235" y1="380" x2="235" y2="398"/>
+    <line x1="625" y1="380" x2="625" y2="398"/>
+  </g>
+  <text x="430" y="530" font-size="13" text-anchor="middle" fill="#555">Models: Ultralytics YOLOv8 / YOLO11 · ncnn .param/.bin · QNN context .bin</text>
+</svg>
