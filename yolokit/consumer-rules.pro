@@ -1,0 +1,2 @@
+-keep class io.github.gd182.yolokit.internal.NcnnNative { *; }
+-keep class io.github.gd182.yolokit.internal.QnnNative { *; }

@@ -1,0 +1,9 @@
+[versions]
+agp = "9.4.0"
+qnn = "2.50.0"
+
+[libraries]
+qnn-runtime = { group = "com.qualcomm.qti", name = "qnn-runtime", version.ref = "qnn" }
+
+[plugins]
+android-library = { id = "com.android.library", version.ref = "agp" }

@@ -1,0 +1,17 @@
+YoloKit
+Copyright 2026 YoloKit contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+This library bundles third-party components under their own licenses:
+
+* ncnn — https://github.com/Tencent/ncnn
+  Copyright (C) THL A29 Limited, a Tencent company. BSD 3-Clause License.
+
+* QNN runtime — com.qualcomm.qti:qnn-runtime (fetched at build time, not included
+  in this repository). Qualcomm AI Stack License: use inside your own application
+  only, not redistribution on a standalone basis.
+
+Model weights are NOT part of this library. Weights converted from Ultralytics YOLO
+are AGPL-3.0 and must not be redistributed with an Apache-2.0 application.
