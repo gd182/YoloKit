@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.RectF
 import io.github.gd182.yolokit.internal.Detector
 import io.github.gd182.yolokit.internal.NcnnDetector
+import io.github.gd182.yolokit.internal.NcnnNative
 import io.github.gd182.yolokit.internal.QnnDetector
 
 /** One detected object. [rect] is in the pixel space of the bitmap passed to [YoloKit.detect]. */
@@ -147,16 +148,81 @@ class ModelConfig private constructor(
  * but a single frame should not be processed twice in parallel.
  */
 class YoloKit private constructor(
-    private val detector: Detector,
+    private val context: Context,
+    private val config: ModelConfig,
+    initialDetector: Detector,
 ) : AutoCloseable {
-
+    private val lock = Any()
+    private var detector: Detector? = initialDetector
+    private var closed = false
     /** Human-readable engine, e.g. "GPU · Vulkan" or "NPU · Qualcomm HTP (QNN) · FP16". */
-    val backendLabel: String get() = detector.backendLabel
+    val backendLabel: String get() = synchronized(lock) {
+            detector?.backendLabel ?: "Stopped"
+        }
 
-    /** Detects objects in an ARGB_8888 [bitmap]. Boxes are in the bitmap's pixel space. */
-    fun detect(bitmap: Bitmap): List<Detection> = detector.detect(bitmap)
+    /**
+     * Detects objects in an ARGB_8888 [bitmap]. Boxes are in the bitmap's pixel space.
+     * @throws IllegalStateException if this instance is stopped or closed.
+     */
+    fun detect(bitmap: Bitmap): List<Detection> = synchronized(lock) {
+        check(!closed) { "YoloKit is closed" }
+        val active = checkNotNull(detector) { "Call start() first" }
+        active.detect(bitmap)
+    }
 
-    override fun close() = detector.close()
+    /**
+     * Unloads the detector while keeping its configuration for future reloading.
+     * Waits for any detection currently holding this instance's lock to finish.
+     * Repeated calls are safe; this does not reopen a closed instance.
+     * Call [start] to reload the model using the saved configuration.
+     *
+     * With [releaseGpu] = true, an NCNN instance also destroys the process-wide Vulkan instance,
+     * which frees driver memory that otherwise stays allocated. The next [start] recreates it, so
+     * the reload is slower. The Vulkan instance is kept if any NCNN model is still loaded, because
+     * native models are shared (see README). QNN has no process-wide state, so the flag has no effect.
+     */
+    fun stop(releaseGpu: Boolean = false): Unit = synchronized(lock) {
+        detector?.close()
+        detector = null
+        if (releaseGpu && config.backend == Backend.NCNN) NcnnNative.nativeReleaseGpu()
+    }
+
+    /**
+     * Reloads the model using the saved configuration after [stop].
+     * Returns success without reloading if the detector is already running.
+     * Returns failure if this instance is closed or the detector reports a loading error.
+     * A failed load leaves this instance stopped so loading can be retried.
+     * Loading is synchronous; call this off the UI thread.
+     */
+    fun start(): Result<Unit> = synchronized(lock) {
+        if (closed) {
+            return@synchronized Result.failure(
+                IllegalStateException("YoloKit is closed")
+            )
+        }
+        if (detector != null) {
+            return@synchronized Result.success(Unit)
+        }
+        val result = when (config.backend) {
+            Backend.NCNN -> NcnnDetector.create(context, config)
+            Backend.QNN -> QnnDetector.create(context, config)
+        }
+        result.map {
+            detector = it
+            Unit
+        }
+    }
+
+    /**
+     * Unloads the detector and permanently closes this instance.
+     * Waits for any detection currently holding this instance's lock to finish.
+     * Repeated calls are safe.
+     */
+    override fun close(): Unit = synchronized(lock) {
+        detector?.close()
+        detector = null
+        closed = true
+    }
 
     companion object {
         /** Class names of the COCO-80 dataset, the training set of the standard YOLOv8 weights. */
@@ -185,7 +251,7 @@ class YoloKit private constructor(
                 Backend.NCNN -> NcnnDetector.create(context, config)
                 Backend.QNN -> QnnDetector.create(context, config)
             }
-            return result.map { YoloKit(it) }
+            return result.map { YoloKit(context.applicationContext, config, it) }
         }
     }
 }

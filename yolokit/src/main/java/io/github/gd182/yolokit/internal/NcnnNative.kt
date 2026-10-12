@@ -27,6 +27,9 @@ internal object NcnnNative {
 
     external fun nativeRelease()
 
+    /** Destroys the Vulkan instance. Call only after [nativeRelease]; a no-op while a model is loaded. */
+    external fun nativeReleaseGpu()
+
     external fun nativePrecision(): String
 }
 

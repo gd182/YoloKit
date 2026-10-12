@@ -91,6 +91,36 @@ Reuse `kit` for subsequent frames and call `kit.close()` when finished.
 The native layer holds one model per backend, so close the existing detector
 before loading another model. Calls to `detect` are serialized internally.
 
+### Stop, restart, and close
+
+`kit.stop()` unloads the detector but keeps its configuration. It waits for
+any detection currently holding the instance's lock to finish; it does not
+interrupt inference. Repeated calls are safe. Call it off the UI thread.
+After stopping, `detect()` throws `IllegalStateException`.
+
+`kit.start()` reloads the model using the saved configuration and returns
+`Result<Unit>`. It returns success without reloading if already running.
+A reported loading error leaves the instance stopped so you can retry.
+Loading is synchronous: call it off the UI thread and handle the result
+before resuming detection. Reloading takes time; the model is not retained
+in memory while stopped.
+
+`kit.stop(releaseGpu = true)` also destroys the process-wide Vulkan instance
+for NCNN, which frees driver memory that stays allocated otherwise. The next
+`start()` recreates it and takes longer. The Vulkan instance is kept while any
+NCNN model is still loaded, because native models are shared. QNN ignores the flag.
+
+`kit.close()` unloads the detector and permanently closes the instance.
+It also waits for the current detection, and repeated calls are safe.
+Calling `stop()` after `close()` does not reopen the instance.
+
+Calling `start()` after `close()` returns failure; create a new instance to
+run detection again after permanent closure.
+Do not keep several active instances for the same backend: native models
+are shared, and releasing one instance can unload another instance's model.
+Stopping does not delete model files or guarantee that all process or driver
+memory is returned to the OS.
+
 For an Ultralytics `format=ncnn` export, change the model configuration to:
 
 ```kotlin

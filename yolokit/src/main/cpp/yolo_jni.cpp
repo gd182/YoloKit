@@ -16,13 +16,25 @@
 
 static Yolo* g_yolo = nullptr;
 static std::mutex g_lock;
+// The Vulkan instance is created on first use and can be destroyed by nativeReleaseGpu()
+// once no model is loaded. Guarded by g_lock.
+static bool g_gpu_instance = false;
+
+// Must be called with g_lock held.
+static void ensure_gpu_instance()
+{
+#if NCNN_VULKAN
+    if (!g_gpu_instance)
+    {
+        ncnn::create_gpu_instance();
+        g_gpu_instance = true;
+    }
+#endif
+}
 
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*)
 {
     LOGI("JNI_OnLoad");
-#if NCNN_VULKAN
-    ncnn::create_gpu_instance();
-#endif
     return JNI_VERSION_1_6;
 }
 
@@ -32,7 +44,11 @@ extern "C" JNIEXPORT void JNI_OnUnload(JavaVM* vm, void*)
     delete g_yolo;
     g_yolo = nullptr;
 #if NCNN_VULKAN
-    ncnn::destroy_gpu_instance();
+    if (g_gpu_instance)
+    {
+        ncnn::destroy_gpu_instance();
+        g_gpu_instance = false;
+    }
 #endif
 }
 
@@ -51,6 +67,7 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeInit(
         jint targetSize, jint numClass, jboolean decoded, jboolean bgr, jboolean useGpu)
 {
     std::lock_guard<std::mutex> lk(g_lock);
+    ensure_gpu_instance();
 
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
@@ -97,10 +114,29 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeRelease(JNIEnv*, jobject)
     g_yolo = nullptr;
 }
 
+// Destroys the Vulkan instance. Does nothing while a model is loaded, because the model's
+// Vulkan objects must be freed first (nativeRelease). The instance is recreated by the next nativeInit.
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_gd182_yolokit_internal_NcnnNative_nativeReleaseGpu(JNIEnv*, jobject)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    if (g_yolo) return;
+#if NCNN_VULKAN
+    if (g_gpu_instance)
+    {
+        ncnn::destroy_gpu_instance();
+        g_gpu_instance = false;
+        LOGI("Vulkan instance released");
+    }
+#endif
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_io_github_gd182_yolokit_internal_NcnnNative_nativeHasGpu(JNIEnv*, jobject)
 {
 #if NCNN_VULKAN
+    std::lock_guard<std::mutex> lk(g_lock);
+    ensure_gpu_instance();
     return ncnn::get_gpu_count() > 0 ? JNI_TRUE : JNI_FALSE;
 #else
     return JNI_FALSE;
