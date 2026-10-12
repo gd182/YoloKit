@@ -27,6 +27,12 @@ Snapdragon можно использовать Qualcomm QNN и NPU Hexagon. По
 
 ## Подключение
 
+Готовый AAR с обфускацией можно собрать командой
+`./gradlew :yolokit:assembleRelease`. Файл появится в
+`yolokit/build/outputs/aar/yolokit-release.aar`.
+Инструкция по подключению AAR, QNN runtime и выбору модели:
+[docs/AAR.md](docs/AAR.md).
+
 Библиотека подключается из исходников через Gradle composite build.
 Добавьте её как подмодуль:
 

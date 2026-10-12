@@ -27,6 +27,11 @@ The camera sample is in [YoloKitMobile](https://github.com/gd182/YoloKitMobile).
 
 ## Add to your project
 
+Build an obfuscated AAR with `./gradlew :yolokit:assembleRelease`.
+The output is `yolokit/build/outputs/aar/yolokit-release.aar`.
+For AAR integration, QNN runtime, and model selection, see
+[docs/AAR.md](docs/AAR.md).
+
 The library is connected from source through a Gradle composite build.
 Add it as a submodule:
 
