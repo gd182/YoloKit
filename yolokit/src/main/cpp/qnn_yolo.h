@@ -15,7 +15,12 @@ public:
     QnnYolo();
     ~QnnYolo();
 
+    /** Loads a QNN HTP context binary from assets. */
     std::string load(AAssetManager* mgr, const std::string& model_asset,
+                     const std::string& native_lib_dir, int num_class, bool boxes_normalized);
+
+    /** Loads a QNN HTP context binary from memory; [binary] is read during the call only. */
+    std::string load(const std::vector<uint8_t>& binary,
                      const std::string& native_lib_dir, int num_class, bool boxes_normalized);
 
     std::string describe() const;

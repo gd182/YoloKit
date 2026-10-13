@@ -25,6 +25,20 @@ else()
     message(STATUS "QNN: disabled (${ANDROID_ABI}, QNN_SDK_ROOT='${QNN_SDK_ROOT}')")
 endif()
 
+target_compile_options(yolokit PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+target_compile_definitions(yolokit PRIVATE
+    YOLOKIT_ENABLE_DIAGNOSTICS=$<IF:$<CONFIG:Debug>,1,0>
+)
+target_link_options(yolokit PRIVATE
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/yolokit.map"
+    "-Wl,--no-undefined-version"
+    "-Wl,-z,relro"
+    "-Wl,-z,now"
+)
+set_property(TARGET yolokit APPEND PROPERTY
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/yolokit.map"
+)
+
 find_library(log-lib log)
 
 target_link_libraries(yolokit

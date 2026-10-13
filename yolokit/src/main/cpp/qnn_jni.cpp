@@ -8,13 +8,13 @@
 #include <vector>
 
 #include "qnn_yolo.h"
+#include "jni_registration.h"
 
 static std::unique_ptr<QnnYolo> g_qnn;
 static std::mutex g_qnn_lock;
 static std::vector<Object> g_objects;
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_io_github_gd182_yolokit_internal_QnnNative_nativeIsBuilt(JNIEnv*, jobject)
+static jboolean JNICALL qnn_IsBuilt(JNIEnv*, jobject)
 {
 #ifdef HAVE_QNN
     return JNI_TRUE;
@@ -23,8 +23,7 @@ Java_io_github_gd182_yolokit_internal_QnnNative_nativeIsBuilt(JNIEnv*, jobject)
 #endif
 }
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_io_github_gd182_yolokit_internal_QnnNative_nativeInit(
+static jstring JNICALL qnn_InitAsset(
         JNIEnv* env, jobject, jobject assetManager, jstring modelAsset, jstring nativeLibDir,
         jint numClass, jboolean boxesNormalized)
 {
@@ -44,23 +43,42 @@ Java_io_github_gd182_yolokit_internal_QnnNative_nativeInit(
     return env->NewStringUTF(err.c_str());
 }
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_io_github_gd182_yolokit_internal_QnnNative_nativeDescribe(JNIEnv* env, jobject)
+static jstring JNICALL qnn_InitBytes(
+        JNIEnv* env, jobject, jbyteArray binary, jstring nativeLibDir,
+        jint numClass, jboolean boxesNormalized)
+{
+    std::lock_guard<std::mutex> lk(g_qnn_lock);
+
+    // One copy from the Java array; the QNN loader reads from this buffer.
+    const jsize n = env->GetArrayLength(binary);
+    std::vector<uint8_t> bytes((size_t)n);
+    if (n > 0)
+        env->GetByteArrayRegion(binary, 0, n, reinterpret_cast<jbyte*>(bytes.data()));
+
+    const char* libDir = env->GetStringUTFChars(nativeLibDir, nullptr);
+    std::string libDirStr(libDir);
+    env->ReleaseStringUTFChars(nativeLibDir, libDir);
+
+    g_qnn.reset(new QnnYolo());
+    std::string err = g_qnn->load(bytes, libDirStr, numClass, boxesNormalized == JNI_TRUE);
+    if (!err.empty()) g_qnn.reset();
+    return env->NewStringUTF(err.c_str());
+}
+
+static jstring JNICALL qnn_Describe(JNIEnv* env, jobject)
 {
     std::lock_guard<std::mutex> lk(g_qnn_lock);
     std::string s = g_qnn ? g_qnn->describe() : std::string();
     return env->NewStringUTF(s.c_str());
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_io_github_gd182_yolokit_internal_QnnNative_nativeRelease(JNIEnv*, jobject)
+static void JNICALL qnn_Release(JNIEnv*, jobject)
 {
     std::lock_guard<std::mutex> lk(g_qnn_lock);
     g_qnn.reset();
 }
 
-extern "C" JNIEXPORT jfloatArray JNICALL
-Java_io_github_gd182_yolokit_internal_QnnNative_nativeDetect(
+static jfloatArray JNICALL qnn_Detect(
         JNIEnv* env, jobject, jobject bitmap, jfloat probThreshold, jfloat nmsThreshold)
 {
     std::lock_guard<std::mutex> lk(g_qnn_lock);
@@ -93,4 +111,21 @@ Java_io_github_gd182_yolokit_internal_QnnNative_nativeDetect(
     jfloatArray result = env->NewFloatArray((jsize)buf.size());
     env->SetFloatArrayRegion(result, 0, (jsize)buf.size(), buf.data());
     return result;
+}
+
+bool register_qnn_natives(JNIEnv* env)
+{
+    const JNINativeMethod methods[] = {
+        native_method("nativeIsBuilt", "()Z", qnn_IsBuilt),
+        native_method("nativeInitAsset",
+                      "(Landroid/content/res/AssetManager;Ljava/lang/String;Ljava/lang/String;IZ)Ljava/lang/String;",
+                      qnn_InitAsset),
+        native_method("nativeInitBytes", "([BLjava/lang/String;IZ)Ljava/lang/String;",
+                      qnn_InitBytes),
+        native_method("nativeDescribe", "()Ljava/lang/String;", qnn_Describe),
+        native_method("nativeRelease", "()V", qnn_Release),
+        native_method("nativeDetect", "(Landroid/graphics/Bitmap;FF)[F", qnn_Detect),
+    };
+    return register_native_methods(env, "io/github/gd182/yolokit/internal/QnnNative",
+                                   methods, sizeof(methods) / sizeof(methods[0]));
 }

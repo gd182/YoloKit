@@ -2,9 +2,11 @@
 
 #include <android/log.h>
 
+#include "logging.h"
+
 #define QLOG_TAG "QnnYolo"
-#define QLOGI(...) __android_log_print(ANDROID_LOG_INFO, QLOG_TAG, __VA_ARGS__)
-#define QLOGE(...) __android_log_print(ANDROID_LOG_ERROR, QLOG_TAG, __VA_ARGS__)
+#define QLOGI(...) YOLOKIT_LOG_INFO(QLOG_TAG, __VA_ARGS__)
+#define QLOGE(...) YOLOKIT_LOG_ERROR(QLOG_TAG, __VA_ARGS__)
 
 #if defined(HAVE_QNN)
 
@@ -269,12 +271,14 @@ struct QnnYolo::Impl
     std::vector<float> outF;
     std::vector<Object> proposals;
     std::vector<Object> kept;
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     double accPre = 0;
     double accExec = 0;
     double accPost = 0;
     int accFrames = 0;
     bool inputRangeLogged = false;
     bool outputRangeLogged = false;
+#endif
 
     ~Impl() { release(); }
 
@@ -576,6 +580,13 @@ std::string QnnYolo::load(AAssetManager* mgr, const std::string& model_asset, co
     }
     AAsset_close(asset);
     if (got != binary.size()) return "short read of asset " + model_asset;
+    return load(binary, native_lib_dir, num_class, boxes_normalized);
+}
+
+std::string QnnYolo::load(const std::vector<uint8_t>& binary, const std::string& native_lib_dir,
+                          int num_class, bool boxes_normalized)
+{
+    if (binary.empty()) return "empty QNN model binary";
 
     impl_->numClass = num_class;
     impl_->boxesNormalized = boxes_normalized;
@@ -596,7 +607,9 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
     Impl& s = *impl_;
     objects.clear();
     if (!s.graph) return -1;
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     const auto tStart = std::chrono::steady_clock::now();
+#endif
 
     float scale = std::min((float)s.inW / width, (float)s.inH / height);
     int newW = (int)std::lround(width * scale);
@@ -639,6 +652,7 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
     else
         fill([&](size_t i, int p) { std::memcpy(dst + i * 4, lut + (size_t)p * 4, 4); });
 
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     if (!s.inputRangeLogged)
     {
         double sums[3] = {0.0, 0.0, 0.0};
@@ -662,8 +676,11 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
               mins[2], maxs[2], sums[2] / pixels, s.nhwc ? "NHWC" : "NCHW");
         s.inputRangeLogged = true;
     }
+#endif
 
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     const auto tPre = std::chrono::steady_clock::now();
+#endif
 
     Qnn_ErrorHandle_t err = s.qnn.graphExecute(s.graph, s.inputs.data(), (uint32_t)s.inputs.size(),
                                                s.outputs.data(), (uint32_t)s.outputs.size(), nullptr, nullptr);
@@ -673,9 +690,10 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
         return -1;
     }
 
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     const auto tExec = std::chrono::steady_clock::now();
+#endif
 
-    const size_t total = (size_t)s.channels * s.anchors;
     auto readOutput = [&](int outputIndex, int outputChannels, bool outputChannelFirst, int dstChannel) {
         const Qnn_Tensor_t& tensor = s.outputs[outputIndex];
         const Qnn_DataType_t type = tensorType(tensor);
@@ -708,7 +726,9 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
     std::vector<Object>& proposals = s.proposals;
     proposals.clear();
     proposals.reserve(std::min(s.anchors, 300));
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     float frameMaxScore = -FLT_MAX;
+#endif
     for (int a = 0; a < s.anchors; a++)
     {
         int label = 0;
@@ -722,7 +742,9 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
                 label = c;
             }
         }
+#if YOLOKIT_ENABLE_DIAGNOSTICS
         frameMaxScore = std::max(frameMaxScore, score);
+#endif
         if (score < prob_threshold) continue;
         float cx = at(0, a) * xMul;
         float cy = at(1, a) * yMul;
@@ -738,8 +760,10 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
         proposals.push_back(o);
     }
 
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     if (!s.outputRangeLogged)
     {
+        const size_t total = (size_t)s.channels * s.anchors;
         float minValue = FLT_MAX;
         float maxValue = -FLT_MAX;
         float maxScore = -FLT_MAX;
@@ -789,6 +813,7 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
         }
         s.outputRangeLogged = true;
     }
+#endif
 
     std::sort(proposals.begin(), proposals.end(), [](const Object& a, const Object& b) { return a.prob > b.prob; });
     if (proposals.size() > 300) proposals.resize(300);
@@ -827,6 +852,7 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
         if (o.w > 1.f && o.h > 1.f) objects.push_back(o);
     }
 
+#if YOLOKIT_ENABLE_DIAGNOSTICS
     const auto tEnd = std::chrono::steady_clock::now();
     auto ms = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -843,6 +869,7 @@ int QnnYolo::detect(const unsigned char* rgba, int width, int height, std::vecto
         s.accPre = s.accExec = s.accPost = 0;
         s.accFrames = 0;
     }
+#endif
     return 0;
 }
 
@@ -859,6 +886,11 @@ QnnYolo::~QnnYolo() = default;
 std::string QnnYolo::describe() const { return ""; }
 
 std::string QnnYolo::load(AAssetManager*, const std::string&, const std::string&, int, bool)
+{
+    return "built without the QNN SDK: set qnn.sdk.dir in local.properties (or QNN_SDK_ROOT) and rebuild";
+}
+
+std::string QnnYolo::load(const std::vector<uint8_t>&, const std::string&, int, bool)
 {
     return "built without the QNN SDK: set qnn.sdk.dir in local.properties (or QNN_SDK_ROOT) and rebuild";
 }

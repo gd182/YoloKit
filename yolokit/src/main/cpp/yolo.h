@@ -19,8 +19,6 @@ struct Object
 
 struct ModelSpec
 {
-    std::string param_asset;
-    std::string bin_asset;
     std::string input_name;
     std::string output_name;
     int target_size = 640;
@@ -34,7 +32,13 @@ class Yolo
 public:
     Yolo();
 
-    int load(AAssetManager* mgr, const ModelSpec& spec, bool use_gpu);
+    /** Loads an ncnn model from assets. Nothing is copied into Java or native heap. */
+    int load(AAssetManager* mgr, const std::string& param_asset, const std::string& bin_asset,
+             const ModelSpec& spec, bool use_gpu);
+
+    /** Loads an ncnn model from memory. [bin] is read during the call only; the object keeps no reference. */
+    int load(const std::string& param_text, const unsigned char* bin, size_t bin_size,
+             const ModelSpec& spec, bool use_gpu);
 
     int detect(const unsigned char* rgba, int width, int height,
                std::vector<Object>& objects,
@@ -44,6 +48,8 @@ public:
     const std::string& weight_precision() const { return precision; }
 
 private:
+    void prepare(const ModelSpec& spec, bool use_gpu);
+
     ncnn::Net yolo;
     ModelSpec spec;
     std::string precision = "UNKNOWN";

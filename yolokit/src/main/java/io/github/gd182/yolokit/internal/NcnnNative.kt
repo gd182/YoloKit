@@ -10,10 +10,23 @@ internal object NcnnNative {
 
     external fun nativeHasGpu(): Boolean
 
-    external fun nativeInit(
+    external fun nativeInitAsset(
         assetManager: AssetManager,
         paramAsset: String,
         binAsset: String,
+        inputName: String,
+        outputName: String,
+        targetSize: Int,
+        numClass: Int,
+        decoded: Boolean,
+        bgr: Boolean,
+        useGpu: Boolean,
+    ): Boolean
+
+    /** Same as [nativeInitAsset], with the files passed as bytes. */
+    external fun nativeInitBytes(
+        paramBytes: ByteArray,
+        binBytes: ByteArray,
         inputName: String,
         outputName: String,
         targetSize: Int,
@@ -41,9 +54,17 @@ internal object QnnNative {
     external fun nativeIsBuilt(): Boolean
 
     /** Returns an empty string on success, otherwise the reason. */
-    external fun nativeInit(
+    external fun nativeInitAsset(
         assetManager: AssetManager,
         modelAsset: String,
+        nativeLibDir: String,
+        numClass: Int,
+        boxesNormalized: Boolean,
+    ): String
+
+    /** Same as [nativeInitAsset], with the QNN context binary passed as bytes. */
+    external fun nativeInitBytes(
+        binary: ByteArray,
         nativeLibDir: String,
         numClass: Int,
         boxesNormalized: Boolean,

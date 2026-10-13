@@ -8,29 +8,46 @@
 #include <cstring>
 
 #include <cpu.h>
+#include <datareader.h>
 #include <layer.h>
 
-static std::string detect_weight_precision(AAssetManager* mgr, const std::string& asset_name)
+// Bounds-checks model reads and prevents ncnn from retaining JNI's temporary buffer.
+class MemoryDataReader : public ncnn::DataReader
 {
-    AAsset* asset = AAssetManager_open(mgr, asset_name.c_str(), AASSET_MODE_STREAMING);
-    if (!asset)
-        return "UNKNOWN";
+public:
+    MemoryDataReader(const unsigned char* data, size_t size) : data_(data), size_(size) {}
 
-    bool has_fp16 = false;
-    bool has_bf16 = false;
-    bool has_int8 = false;
-    uint8_t buffer[64 * 1024];
-
-    for (;;)
+    size_t read(void* buf, size_t size) const override
     {
-        const int bytes_read = AAsset_read(asset, buffer, sizeof(buffer));
-        if (bytes_read <= 0)
-            break;
+        const size_t n = std::min(size, size_ - pos_);
+        std::memcpy(buf, data_ + pos_, n);
+        pos_ += n;
+        return n;
+    }
 
-        for (int offset = 0; offset + 4 <= bytes_read; offset += 4)
+    size_t reference(size_t, const void**) const override
+    {
+        // ncnn falls back to read() and allocates its own persistent weight storage.
+        return 0;
+    }
+
+private:
+    const unsigned char* data_;
+    size_t size_;
+    mutable size_t pos_ = 0;
+};
+
+// Finds quantization tags in the weights. Feed it chunks in file order; chunk sizes that are
+// multiples of 4 keep the tags aligned, which the asset path guarantees.
+class PrecisionScan
+{
+public:
+    void feed(const unsigned char* data, size_t size)
+    {
+        for (size_t offset = 0; offset + 4 <= size; offset += 4)
         {
             uint32_t tag;
-            std::memcpy(&tag, buffer + offset, sizeof(tag));
+            std::memcpy(&tag, data + offset, sizeof(tag));
             if (tag == 0x01306B47u)
                 has_fp16 = true;
             else if (tag == 0x01348B83u)
@@ -39,19 +56,26 @@ static std::string detect_weight_precision(AAssetManager* mgr, const std::string
                 has_int8 = true;
         }
     }
-    AAsset_close(asset);
 
-    const int detected_types = (has_fp16 ? 1 : 0) + (has_bf16 ? 1 : 0) + (has_int8 ? 1 : 0);
-    if (detected_types > 1)
-        return "MIXED";
-    if (has_int8)
-        return "INT8";
-    if (has_fp16)
-        return "FP16";
-    if (has_bf16)
-        return "BF16";
-    return "FP32";
-}
+    std::string result() const
+    {
+        const int detected_types = (has_fp16 ? 1 : 0) + (has_bf16 ? 1 : 0) + (has_int8 ? 1 : 0);
+        if (detected_types > 1)
+            return "MIXED";
+        if (has_int8)
+            return "INT8";
+        if (has_fp16)
+            return "FP16";
+        if (has_bf16)
+            return "BF16";
+        return "FP32";
+    }
+
+private:
+    bool has_fp16 = false;
+    bool has_bf16 = false;
+    bool has_int8 = false;
+};
 
 static inline float sigmoid(float x)
 {
@@ -252,14 +276,13 @@ Yolo::Yolo()
     workspace_pool_allocator.set_size_compare_ratio(0.f);
 }
 
-int Yolo::load(AAssetManager* mgr, const ModelSpec& _spec, bool use_gpu)
+void Yolo::prepare(const ModelSpec& _spec, bool use_gpu)
 {
     yolo.clear();
     blob_pool_allocator.clear();
     workspace_pool_allocator.clear();
 
     spec = _spec;
-    precision = detect_weight_precision(mgr, spec.bin_asset);
 
     ncnn::set_cpu_powersave(2);
     ncnn::set_omp_num_threads(ncnn::get_big_cpu_count());
@@ -273,10 +296,51 @@ int Yolo::load(AAssetManager* mgr, const ModelSpec& _spec, bool use_gpu)
     yolo.opt.workspace_allocator = &workspace_pool_allocator;
 
     gpu_loaded = yolo.opt.use_vulkan_compute;
+}
 
-    if (yolo.load_param(mgr, spec.param_asset.c_str()) != 0) return -1;
-    if (yolo.load_model(mgr, spec.bin_asset.c_str()) != 0) return -1;
+int Yolo::load(AAssetManager* mgr, const std::string& param_asset, const std::string& bin_asset,
+               const ModelSpec& _spec, bool use_gpu)
+{
+    prepare(_spec, use_gpu);
 
+    PrecisionScan scan;
+    AAsset* asset = AAssetManager_open(mgr, bin_asset.c_str(), AASSET_MODE_STREAMING);
+    if (asset)
+    {
+        unsigned char buffer[64 * 1024];
+        for (;;)
+        {
+            const int bytes_read = AAsset_read(asset, buffer, sizeof(buffer));
+            if (bytes_read <= 0)
+                break;
+            scan.feed(buffer, (size_t)bytes_read);
+        }
+        AAsset_close(asset);
+        precision = scan.result();
+    }
+    else
+    {
+        precision = "UNKNOWN";
+    }
+
+    if (yolo.load_param(mgr, param_asset.c_str()) != 0) return -1;
+    if (yolo.load_model(mgr, bin_asset.c_str()) != 0) return -1;
+    return 0;
+}
+
+int Yolo::load(const std::string& param_text, const unsigned char* bin, size_t bin_size,
+               const ModelSpec& _spec, bool use_gpu)
+{
+    prepare(_spec, use_gpu);
+
+    PrecisionScan scan;
+    scan.feed(bin, bin_size);
+    precision = scan.result();
+
+    // load_param_mem expects NUL-terminated text; c_str() of the std::string provides it.
+    if (yolo.load_param_mem(param_text.c_str()) != 0) return -1;
+    MemoryDataReader bin_reader(bin, bin_size);
+    if (yolo.load_model(bin_reader) != 0) return -1;
     return 0;
 }
 

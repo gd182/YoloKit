@@ -45,16 +45,27 @@ internal class NcnnDetector private constructor(
 
     companion object {
         fun create(context: Context, config: ModelConfig): Result<Detector> {
-            val param = config.paramAsset!!
-            val bin = config.binAsset!!
-            if (!assetExists(context, param) || !assetExists(context, bin)) {
-                return Result.failure(IllegalStateException("missing $param or $bin in assets"))
+            val param = config.paramSource!!
+            val bin = config.binSource!!
+            val targetSize = config.inputSize
+            val numClass = config.labels.size
+            val ok = if (param is ModelSource.Asset && bin is ModelSource.Asset) {
+                if (!assetExists(context, param.name) || !assetExists(context, bin.name)) {
+                    return Result.failure(IllegalStateException("missing ${param.name} or ${bin.name} in assets"))
+                }
+                NcnnNative.nativeInitAsset(
+                    context.assets, param.name, bin.name, config.inputName, config.outputName,
+                    targetSize, numClass, config.decoded, !config.rgbOrder, config.useGpu,
+                )
+            } else {
+                val paramBytes = param.readBytes(context).getOrElse { return Result.failure(it) }
+                val binBytes = bin.readBytes(context).getOrElse { return Result.failure(it) }
+                NcnnNative.nativeInitBytes(
+                    paramBytes, binBytes, config.inputName, config.outputName,
+                    targetSize, numClass, config.decoded, !config.rgbOrder, config.useGpu,
+                )
             }
-            val ok = NcnnNative.nativeInit(
-                context.assets, param, bin, config.inputName, config.outputName,
-                config.inputSize, config.labels.size, config.decoded, !config.rgbOrder, config.useGpu,
-            )
-            if (!ok) return Result.failure(IllegalStateException("ncnn could not load $param"))
+            if (!ok) return Result.failure(IllegalStateException("ncnn could not load the model"))
             val gpu = config.useGpu && NcnnNative.nativeHasGpu()
             val runtime = when {
                 gpu -> "GPU · Vulkan"
@@ -95,14 +106,19 @@ internal class QnnDetector private constructor(
             if (!isAvailable()) {
                 return Result.failure(UnsupportedOperationException("QNN needs an arm64 Qualcomm device with the QNN build"))
             }
-            val asset = config.binaryAsset!!
-            if (!assetExists(context, asset)) {
-                return Result.failure(IllegalStateException("missing $asset in assets"))
+            val source = config.binarySource!!
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            val error = if (source is ModelSource.Asset) {
+                if (!assetExists(context, source.name)) {
+                    return Result.failure(IllegalStateException("missing ${source.name} in assets"))
+                }
+                QnnNative.nativeInitAsset(
+                    context.assets, source.name, nativeLibDir, config.labels.size, config.boxesNormalized,
+                )
+            } else {
+                val binary = source.readBytes(context).getOrElse { return Result.failure(it) }
+                QnnNative.nativeInitBytes(binary, nativeLibDir, config.labels.size, config.boxesNormalized)
             }
-            val error = QnnNative.nativeInit(
-                context.assets, asset, context.applicationInfo.nativeLibraryDir,
-                config.labels.size, config.boxesNormalized,
-            )
             if (error.isNotEmpty()) return Result.failure(IllegalStateException(error))
             val precision = Regex("""\bin \[[^]]+] (u8q|i8q|u16q|i16q|fp16|fp32)\b""")
                 .find(QnnNative.nativeDescribe())?.groupValues?.get(1)

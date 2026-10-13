@@ -9,10 +9,12 @@
 #include <gpu.h>
 
 #include "yolo.h"
+#include "jni_registration.h"
+#include "logging.h"
 
 #define LOG_TAG "YoloNcnn"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) YOLOKIT_LOG_INFO(LOG_TAG, __VA_ARGS__)
+#define LOGE(...) YOLOKIT_LOG_ERROR(LOG_TAG, __VA_ARGS__)
 
 static Yolo* g_yolo = nullptr;
 static std::mutex g_lock;
@@ -34,6 +36,11 @@ static void ensure_gpu_instance()
 
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*)
 {
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+        return JNI_ERR;
+    if (!register_ncnn_natives(env) || !register_qnn_natives(env))
+        return JNI_ERR;
     LOGI("JNI_OnLoad");
     return JNI_VERSION_1_6;
 }
@@ -60,32 +67,32 @@ static std::string jstr(JNIEnv* env, jstring s)
     return out;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_io_github_gd182_yolokit_internal_NcnnNative_nativeInit(
-        JNIEnv* env, jobject, jobject assetManager,
-        jstring paramAsset, jstring binAsset, jstring inputName, jstring outputName,
-        jint targetSize, jint numClass, jboolean decoded, jboolean bgr, jboolean useGpu)
+// Copies Java model bytes into a temporary native buffer for loading.
+static std::vector<unsigned char> jbytes(JNIEnv* env, jbyteArray a)
 {
-    std::lock_guard<std::mutex> lk(g_lock);
-    ensure_gpu_instance();
+    const jsize n = env->GetArrayLength(a);
+    std::vector<unsigned char> out((size_t)n);
+    if (n > 0)
+        env->GetByteArrayRegion(a, 0, n, reinterpret_cast<jbyte*>(out.data()));
+    return out;
+}
 
-    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
-
+static ModelSpec make_spec(JNIEnv* env, jstring inputName, jstring outputName,
+                           jint targetSize, jint numClass, jboolean decoded, jboolean bgr)
+{
     ModelSpec spec;
-    spec.param_asset = jstr(env, paramAsset);
-    spec.bin_asset = jstr(env, binAsset);
     spec.input_name = jstr(env, inputName);
     spec.output_name = jstr(env, outputName);
     spec.target_size = targetSize;
     spec.num_class = numClass;
     spec.decoded = decoded;
     spec.bgr = bgr;
+    return spec;
+}
 
-    if (!g_yolo)
-        g_yolo = new Yolo();
-
-    int ret = g_yolo->load(mgr, spec, useGpu);
-
+// Must be called with g_lock held.
+static jboolean finish_load(int ret)
+{
     if (ret != 0)
     {
         LOGE("Yolo::load failed (%d)", ret);
@@ -98,16 +105,48 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeInit(
     return JNI_TRUE;
 }
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_io_github_gd182_yolokit_internal_NcnnNative_nativePrecision(JNIEnv* env, jobject)
+static jboolean JNICALL ncnn_InitAsset(
+        JNIEnv* env, jobject, jobject assetManager,
+        jstring paramAsset, jstring binAsset, jstring inputName, jstring outputName,
+        jint targetSize, jint numClass, jboolean decoded, jboolean bgr, jboolean useGpu)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    ensure_gpu_instance();
+
+    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
+    ModelSpec spec = make_spec(env, inputName, outputName, targetSize, numClass, decoded, bgr);
+
+    if (!g_yolo)
+        g_yolo = new Yolo();
+    return finish_load(g_yolo->load(mgr, jstr(env, paramAsset), jstr(env, binAsset), spec, useGpu));
+}
+
+static jboolean JNICALL ncnn_InitBytes(
+        JNIEnv* env, jobject, jbyteArray paramBytes, jbyteArray binBytes,
+        jstring inputName, jstring outputName,
+        jint targetSize, jint numClass, jboolean decoded, jboolean bgr, jboolean useGpu)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    ensure_gpu_instance();
+
+    const std::vector<unsigned char> param = jbytes(env, paramBytes);
+    const std::vector<unsigned char> bin = jbytes(env, binBytes);
+    const std::string paramText(param.begin(), param.end());
+    ModelSpec spec = make_spec(env, inputName, outputName, targetSize, numClass, decoded, bgr);
+
+    if (!g_yolo)
+        g_yolo = new Yolo();
+    return finish_load(g_yolo->load(paramText, bin.data(), bin.size(), spec, useGpu));
+}
+
+static jstring JNICALL ncnn_Precision(JNIEnv* env, jobject)
 {
     std::lock_guard<std::mutex> lk(g_lock);
     const char* precision = g_yolo ? g_yolo->weight_precision().c_str() : "UNKNOWN";
     return env->NewStringUTF(precision);
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_io_github_gd182_yolokit_internal_NcnnNative_nativeRelease(JNIEnv*, jobject)
+static void JNICALL ncnn_Release(JNIEnv*, jobject)
 {
     std::lock_guard<std::mutex> lk(g_lock);
     delete g_yolo;
@@ -116,8 +155,7 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeRelease(JNIEnv*, jobject)
 
 // Destroys the Vulkan instance. Does nothing while a model is loaded, because the model's
 // Vulkan objects must be freed first (nativeRelease). The instance is recreated by the next nativeInit.
-extern "C" JNIEXPORT void JNICALL
-Java_io_github_gd182_yolokit_internal_NcnnNative_nativeReleaseGpu(JNIEnv*, jobject)
+static void JNICALL ncnn_ReleaseGpu(JNIEnv*, jobject)
 {
     std::lock_guard<std::mutex> lk(g_lock);
     if (g_yolo) return;
@@ -131,8 +169,7 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeReleaseGpu(JNIEnv*, jobje
 #endif
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_io_github_gd182_yolokit_internal_NcnnNative_nativeHasGpu(JNIEnv*, jobject)
+static jboolean JNICALL ncnn_HasGpu(JNIEnv*, jobject)
 {
 #if NCNN_VULKAN
     std::lock_guard<std::mutex> lk(g_lock);
@@ -143,8 +180,7 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeHasGpu(JNIEnv*, jobject)
 #endif
 }
 
-extern "C" JNIEXPORT jfloatArray JNICALL
-Java_io_github_gd182_yolokit_internal_NcnnNative_nativeDetect(
+static jfloatArray JNICALL ncnn_Detect(
         JNIEnv* env, jobject, jobject bitmap, jfloat probThreshold, jfloat nmsThreshold)
 {
     std::lock_guard<std::mutex> lk(g_lock);
@@ -180,4 +216,22 @@ Java_io_github_gd182_yolokit_internal_NcnnNative_nativeDetect(
     }
     env->SetFloatArrayRegion(result, 0, (jsize)buf.size(), buf.data());
     return result;
+}
+
+bool register_ncnn_natives(JNIEnv* env)
+{
+    const JNINativeMethod methods[] = {
+        native_method("nativeHasGpu", "()Z", ncnn_HasGpu),
+        native_method("nativeInitAsset",
+                      "(Landroid/content/res/AssetManager;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIZZZ)Z",
+                      ncnn_InitAsset),
+        native_method("nativeInitBytes",
+                      "([B[BLjava/lang/String;Ljava/lang/String;IIZZZ)Z", ncnn_InitBytes),
+        native_method("nativeDetect", "(Landroid/graphics/Bitmap;FF)[F", ncnn_Detect),
+        native_method("nativeRelease", "()V", ncnn_Release),
+        native_method("nativeReleaseGpu", "()V", ncnn_ReleaseGpu),
+        native_method("nativePrecision", "()Ljava/lang/String;", ncnn_Precision),
+    };
+    return register_native_methods(env, "io/github/gd182/yolokit/internal/NcnnNative",
+                                   methods, sizeof(methods) / sizeof(methods[0]));
 }

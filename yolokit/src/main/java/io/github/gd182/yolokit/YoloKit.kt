@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
 import io.github.gd182.yolokit.internal.Detector
+import io.github.gd182.yolokit.internal.ModelSource
 import io.github.gd182.yolokit.internal.NcnnDetector
 import io.github.gd182.yolokit.internal.NcnnNative
 import io.github.gd182.yolokit.internal.QnnDetector
@@ -38,9 +39,9 @@ enum class Backend {
  */
 class ModelConfig private constructor(
     val backend: Backend,
-    val paramAsset: String?,
-    val binAsset: String?,
-    val binaryAsset: String?,
+    internal val paramSource: ModelSource?,
+    internal val binSource: ModelSource?,
+    internal val binarySource: ModelSource?,
     val labels: List<String>,
     val inputSize: Int,
     val inputName: String,
@@ -55,9 +56,9 @@ class ModelConfig private constructor(
 
     class Builder {
         private var backend: Backend = Backend.NCNN
-        private var param: String? = null
-        private var bin: String? = null
-        private var binary: String? = null
+        private var param: ModelSource? = null
+        private var bin: ModelSource? = null
+        private var binary: ModelSource? = null
         private var labels: List<String> = emptyList()
         private var inputSize: Int = 640
         private var inputName: String = "images"
@@ -80,6 +81,31 @@ class ModelConfig private constructor(
             decoded: Boolean = false,
             inputName: String = if (decoded) "in0" else "images",
             outputName: String = if (decoded) "out0" else "output",
+        ): Builder = ncnnSources(
+            ModelSource.Asset(param), ModelSource.Asset(bin), decoded, inputName, outputName,
+        )
+
+        /**
+         * An ncnn model from memory, for example a file the app decrypted. The arrays are read
+         * each time the model loads ([YoloKit.create] and every [YoloKit.start]), so they must stay
+         * unchanged for the life of the instance. Same parameters as the asset overload.
+         */
+        fun ncnn(
+            param: ByteArray,
+            bin: ByteArray,
+            decoded: Boolean = false,
+            inputName: String = if (decoded) "in0" else "images",
+            outputName: String = if (decoded) "out0" else "output",
+        ): Builder = ncnnSources(
+            ModelSource.Bytes(param), ModelSource.Bytes(bin), decoded, inputName, outputName,
+        )
+
+        private fun ncnnSources(
+            param: ModelSource,
+            bin: ModelSource,
+            decoded: Boolean,
+            inputName: String,
+            outputName: String,
         ) = apply {
             backend = Backend.NCNN
             this.param = param
@@ -91,9 +117,16 @@ class ModelConfig private constructor(
         }
 
         /** A pre-compiled QNN HTP context binary from assets (see docs/QNN.md). */
-        fun qnn(binaryAsset: String, boxesNormalized: Boolean = false) = apply {
+        fun qnn(binaryAsset: String, boxesNormalized: Boolean = false): Builder =
+            qnnSource(ModelSource.Asset(binaryAsset), boxesNormalized)
+
+        /** A pre-compiled QNN HTP context binary from memory. Same rules as the [ncnn] byte overload. */
+        fun qnn(binary: ByteArray, boxesNormalized: Boolean = false): Builder =
+            qnnSource(ModelSource.Bytes(binary), boxesNormalized)
+
+        private fun qnnSource(source: ModelSource, boxesNormalized: Boolean) = apply {
             backend = Backend.QNN
-            binary = binaryAsset
+            binary = source
             this.boxesNormalized = boxesNormalized
             rgbOrder = true
         }
@@ -123,9 +156,9 @@ class ModelConfig private constructor(
             }
             return ModelConfig(
                 backend = backend,
-                paramAsset = param,
-                binAsset = bin,
-                binaryAsset = binary,
+                paramSource = param,
+                binSource = bin,
+                binarySource = binary,
                 labels = labels,
                 inputSize = inputSize,
                 inputName = inputName,

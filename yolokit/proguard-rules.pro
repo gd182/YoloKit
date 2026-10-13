@@ -6,7 +6,7 @@
 -keep class io.github.gd182.yolokit.YoloKit { public protected *; }
 -keep class io.github.gd182.yolokit.YoloKit$Companion { public protected *; }
 
-# JNI exports in libyolokit.so use the original class and method names.
+# RegisterNatives looks up these classes and native methods by their original names.
 -include consumer-rules.pro
 
 -keep class kotlin.Metadata { *; }
